@@ -1,0 +1,9 @@
+*/.step
+*.tfstate*
+*.backup
+.terraform
+token.txt
+*.log
+*.zip
+*.hcl
+
