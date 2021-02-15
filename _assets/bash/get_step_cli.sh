@@ -10,4 +10,7 @@ else
   wget -q $STEP_BUNDLE_URL
 fi
 
-sudo apt -y install ./$STEP_BUNDLE_NAME mkcert
+sudo apt -yf install ./$STEP_BUNDLE_NAME mkcert
+step version
+
+printf "\n> Installation completed.\n\n"

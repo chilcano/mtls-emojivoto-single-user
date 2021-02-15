@@ -32,6 +32,7 @@ This example will use automation to provision an instance of [Emojivoto](https:/
 ```bash
 # you can overwtite it exporting AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_DEFAULT_REGION 
 $ aws configure
+
 AWS Access Key ID []: ****************UJ7U
 AWS Secret Access Key []: ****************rUg8
 Default region name []: eu-west-2
@@ -39,6 +40,7 @@ Default output format []: json
 
 # should list S3 buckets if the account has any
 $ aws s3 ls
+
 2017-10-26 13:50:39 smallstep-not-a-real-bucket
 2017-10-26 15:43:20 smallstep-fake-bucket
 2018-04-09 17:25:18 smallstep-nobody-home
@@ -130,7 +132,32 @@ AWS Emojivoto leverages an internal CA to secure communication between services 
 
 ### 1. Using Step CLI
 
+**Install SmallStep Step CLI for Linux (amd64.deb)**  
+
+```sh
+$ curl -s https://raw.githubusercontent.com/chilcano/mtls-emojivoto-tf/main/_assets/bash/get_step_cli.sh | bash
+``` 
+
+**Get `root_ca.crt`**
+
+```sh
+$ ssh ubuntu@<emojivoto-ca-ip> -i ~/.ssh/<ssh-pub-key>
+
+$ step ca root root_ca.crt --ca-url https://localhost:443
+'step ca root' requires the '--fingerprint' flag
+
+$ cat /usr/local/lib/step/config/ca.json
+$ ll /usr/local/lib/step/certs/
+total 16
+drwxr-xr-x 2 step puppet 4096 Feb 14 17:07 ./
+drwxr-xr-x 6 step puppet 4096 Feb 14 17:07 ../
+-rw-r--r-- 1 step puppet  648 Feb 14 17:07 intermediate_ca.crt
+-rw-r--r-- 1 step puppet  587 Feb 14 17:07 root_ca.crt
 ```
+
+**Query `https://web.emojivoto.local`**
+
+```sh
 $ step certificate inspect --roots root_ca.crt --short https://web.emojivoto.local
 
 X.509v3 TLS Certificate (ECDSA P-256) [Serial: 1993...2666]
