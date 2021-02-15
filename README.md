@@ -1,227 +1,80 @@
-# AWS Emojivoto
-The following example uses step to securely deploy [Emojivoto](https://github.com/buoyantio/emojivoto) microservice to AWS using mTLS. We'll be using the following technologies:
+# MTLS Emojivoto on AWS
 
-* AWS to host the example
-* Puppet for machine-level provisioning
-* Terraform to configure the infrastructure
-* Envoy to handle TLS termination
-* step certificates & step SDS for certificate management
+> This Git repo is based in [SmallStep Emojivoto demo](https://github.com/smallstep/step-aws-emojivoto).  
+> The application used is the [Buoyant Emojivoto](https://github.com/buoyantio/emojivoto) microservices.  
+
+Technology used:
+
+* AWS to host the example application.
+* Puppet for machine-level provisioning.
+* Terraform to configure the infrastructure.
+* [Envoy Proxy](https://www.envoyproxy.io) as sidecar, [handle TLS and manage the TLS secrets](https://www.envoyproxy.io/docs/envoy/latest/configuration/security/secret#config-secret-discovery-service).
+* [SmallStep Certificates](https://github.com/smallstep/certificates) & [SmallStep SDS](https://github.com/smallstep/step-sds) for certificate management.
 
 ## Microservices Deployment Architecture
 
-This example will use automation to provision an instance of [Emojivoto](https://github.com/buoyantio/emojivoto).
+This example will use automation to provision an instance of [Emojivoto](https://github.com/buoyantio/emojivoto) and enable MTLS authentication for the microservices.
 
-```
-          +--------------+
-          |    BROWSER   |
-          +------+-------+
-                 |
-                 |TLS
-                 |
-          +------+-------+
-          |    ENVOY     |
-          |      |       |                 +------------+
-          |     WEB      |                 |            |
-          |      |       |    TLS+mTLS     |     CA     |
-          |    ENVOY--SDS+-----------------+            |
-          +------+-------+                 +-----+------+
-                 |                               |
-                 |                               |
-                 |                               |TLS+mTLS
-         mTLS    |   mTLS                        |
-      +----------+----------+                    |
-      |                     |                    |
-      |                     |                    |
-+-----+-------+       +-----+--------+           |
-|   ENVOY     |       |   ENVOY      |           |
-|     |       |       |              |           |
-|   EMOJI--SDS|       |   VOTING--SDS+-----------+
-+-----------+-+       +--------------+           |
-            |                                    |
-            |                                    |
-            |                                    |
-            +------------------------------------+
-```
+![](_assets/img/mtls-emojivoto-on-aws-1.png)
 
-* Emojivoto as is does not support (m)TLS
+* Emojivoto as is does not support (m)TLS.
 * Every service in the diagram above will run on its own dedicated VM (EC2 instance) in AWS.
-* An Envoy sidecar proxy (ingress & egress) per service will handle mutual TLS (authentication & encryption).
-* Envoy sidecars obtain certificates through the *[secret discovery service](https://www.envoyproxy.io/docs/envoy/latest/configuration/secret)* (step SDS) exposed via a local UNIX domain socket.
-* Step SDS will fetch a certificate, as well as the trust bundle (root certificate), from the internal Certificate Authority (learn more at [step certificates](https://github.com/smallstep/certificates)) on behalf of each service/sidecar pair.
-* Step SDS will handle renewals for certificates that are nearing the end of their lifetimes.
+* An Envoy Proxy as sidecar (ingress & egress) per service will handle mutual TLS (authentication & encryption).
+* Envoy sidecars obtain certificates through the [Secret Discovery Service (SDS)](https://www.envoyproxy.io/docs/envoy/latest/configuration/security/secret#config-secret-discovery-service) from exposed SmallStep SDS (via a local UNIX domain socket).
+* [SmallStep SDS](https://github.com/smallstep/step-sds) will fetch a certificate, as well as the trust bundle (root certificate), from the internal CA ([SmallStep Certificates](https://github.com/smallstep/certificates)) on behalf of each service/sidecar pair.
+* [SmallStep SDS](https://github.com/smallstep/step-sds) will handle renewals for certificates that are nearing the end of their lifetimes.
 
-## Step-by-Step Setup Instructions
+## Instructions
 
-This AWS example integration will use full automation to provision infrastructure, machines, and services from scratch. While there are a plethora of tools availabe, Terraform & Puppet were chosen for provisioning. Before kicking off the provisioning process we need to configure AWS (account credentials & permissions), SSH, and Terraform.
+### Step 1. AWS configuration
 
-### AWS CLI
-
-Install and configure the AWS CLI. AWS has instructions for installing the CLI on various platforms at: [https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-install.html](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-install.html).
-
-Once installed, grab AWS credentials from your account or AWS IAM (depends on what you're using) and follow the interactive steps of the `configure` command. [AWS's documentation](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html) has detailed instructions on how to get AWS credentials. Make sure the credentials granted the IAM policies `AmazonEC2FullAccess`, `AmazonVPCFullAccess`, and `AmazonRoute53FullAccess` (broad permissions) or at the minimum permissions as per the [policy file included in the repo](policy.json).
 
 ```bash
+# you can overwtite it exporting AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_DEFAULT_REGION 
 $ aws configure
 AWS Access Key ID []: ****************UJ7U
 AWS Secret Access Key []: ****************rUg8
-Default region name []: us-west-1
+Default region name []: eu-west-2
 Default output format []: json
-$ aws s3 ls
+
 # should list S3 buckets if the account has any
+$ aws s3 ls
 2017-10-26 13:50:39 smallstep-not-a-real-bucket
 2017-10-26 15:43:20 smallstep-fake-bucket
 2018-04-09 17:25:18 smallstep-nobody-home
 ```
 
-### SSH Key Pair
+### Step 2. SSH Keys
 
-Terraform requires a key pair to be used for provisioning EC2 machine instances. Any key pair available in the respective region will work as long as the local terraform/puppet process has access to the key pair's private key. Please see the [AWS EC2 Key Pairs documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-key-pairs.html) for details on how to manage key pairs in AWS.
-
-The EC2 key pair will likely be available as a single file in `PEM` format. Use the following commands to convert the `PEM` and place the resulting files in locations where terraform and puppet can locate them.
+Terraform requires a SSH key pair (public key - PEM format) to be used for provisioning EC2 instances. While that Puppet provisioning process will require another SSH key pair (private key).
+I've modified existing Terraform scripts to use a same SSH key pair (public and private keys) to provisioning EC2 instances and to provisioning through Puppet.
 
 ```bash
-$ chmod 400 aws-e2e-howto.pem
-# we will need the public key in terraform config
-$ ssh-keygen -f aws-e2e-howto.pem -y > ~/.ssh/terraform.pub
-# the private key is already in the correct format
-$ cp aws-e2e-howto.pem ~/.ssh/terraform
-# new files only readable by owner (not encrypted on disk!)
-$ chmod 400 ~/.ssh/terraform*
+$ ssh-keygen -P "" -m PEM -f ~/.ssh/<your-key-name>
 ```
 
-> Note: It's not required to use key pairs generated by AWS. `ssh-keygen` will work for anybody who's familiar and prefers local key generation.
+### Step 3. Execute Terraform
 
-### Terraform
+The original Terraform scripts used a backend hosted by [Hashicorp](https://app.terraform.io/session) to store state information about managed infrastrucutre, however I've tweaked those in order to use the local system to persist the Terraformk state.  
+Once AWS CLI and Terraform CLI & definitions are in place, we can initialize the workspace on the local terraform backend:
 
-Terraform uses a backend (hosted by [Hashicorp](https://app.terraform.io/session)) to store state information about managed infrastrucutre as well as manage concurrency locks to allow only one team member to perform changes at a time. The CLI needs a user configuration as outlined below. Create a user account and org at [app.terraform.io](https://app.terraform.io/session) and grab a user token. For more details please see [Hashicorp's Terraform CLI docs](https://www.terraform.io/docs/commands/cli-config.html).
-
-> Note: Terraform won't strictly require a backend when being used by a single developer/operator
 
 ```bash
-$ cat ~/.terraformrc
-credentials "app.terraform.io" {
-  token = "<terraform user token goes here>"
-}
-```
+# clone the Git repo
+$ git clone https://github.com/chilcano/mtls-emojivoto-tf
+$ cd mtls-emojivoto-tf
 
-Once the `~/.terraformrc` is in place the Terraform backends needs to be initialized. Before running the `init` command Terraform needs to be configured with the proper workplace, org, and ssh public key.
-
-```bash
-diff --git a/aws-emojivoto/emojivoto.tf b/aws-emojivoto/emojivoto.tf
-index b510dcb..33ff92d 100644
---- a/aws-emojivoto/emojivoto.tf
-+++ b/aws-emojivoto/emojivoto.tf
-@@ -1,9 +1,9 @@
- terraform {
-   backend "remote" {
--    organization = "Smallstep"
-+    organization = "<my org>"
-
-     workspaces {
--      name = "Emojivoto"
-+      name = "<my workspace: e.g. Step-AWS-Integration>"
-     }
-   }
- }
-@@ -17,7 +17,7 @@ provider "aws" {
- # Create an SSH key pair to connect to our instances
- resource "aws_key_pair" "terraform" {
-   key_name   = "terraform-key"
--  public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCVEhUwiAivgdFuu5rOv8ArAMqTA6N56yd5RA+uHdaC0e4MM3TYhUOwox0fV+opE3OKLYdG2+mF/6Z4k8PgsBxLpJxdQ9XHut3A9WoqCEANVfZ7dQ0mgJs1MijIAbVg1kXgYTg/2iFN6FCO74ewAJAL2e8GqBDRkwIueKbphmO5U0mK3d/nnLK0QSFYgQGFGFHvXkeQKus+625IHifat/GTZZmhCxZBcAKzaAWB8dSaZGslaKsixy3EGiY5Gqdi5tQvt+obxZ59o4Jk352YlxhlUSxoxpeOyCiBZkexZgm+0MbeBrDuOMwg/tpcUiJ0/lVomx+dQuIX6ciKIuwnvDhx"
-+  public_key = "<SSH Public Key, as in ~/.ssh/terraform.pub>"
- }
-
- variable "ami" {
-```
-
-Once AWS CLI and Terraform CLI & definitions are in place, we can initialize the workspace on the Terraform backend:
-
-```bash
+# initialize 
 $ terraform init
-Initializing the backend...
-Backend configuration changed!
 
-Terraform has detected that the configuration specified for the backend
-has changed. Terraform will now check for existing state in the backends.
+$ terraform plan
 
-
-Successfully configured the backend "remote"! Terraform will automatically
-use this backend unless the backend configuration changes.
-
-Initializing provider plugins...
-
-Terraform has been successfully initialized!
-[...]
-```
-
-Now Terraform is ready to go. The `apply` command will print out a long execution plan of all the infrastructure that will be created. Terraform will prompt for a confirmation (type `yes`) before executing on the plan. Please note: The completion of this process can take some time.
-
-```bash
-$ terraform apply
-Acquiring state lock. This may take a few moments...
-
-An execution plan has been generated and is shown below.
-Resource actions are indicated with the following symbols:
-  + create
-
-Terraform will perform the following actions:
-Acquiring state lock. This may take a few moments...
-
-An execution plan has been generated and is shown below.
-Resource actions are indicated with the following symbols:
-  + create
-
-Terraform will perform the following actions:
-Acquiring state lock. This may take a few moments...
-
-An execution plan has been generated and is shown below.
-Resource actions are indicated with the following symbols:
-  + create
-
-Terraform will perform the following actions:
-
-  # aws_instance.ca will be created
-  + resource "aws_instance" "ca" {
-      + ami                          = "ami-068670db424b01e9a"
-      + arn                          = (known after apply)
-      + associate_public_ip_address  = true
-      + availability_zone            = (known after apply)
-      + cpu_core_count               = (known after apply)
-      + cpu_threads_per_core         = (known after apply)
-      + get_password_data            = false
-      + host_id                      = (known after apply)
-      + id                           = (known after apply)
-      + instance_state               = (known after apply)
-      + instance_type                = "t2.micro"
-      + ipv6_address_count           = (known after apply)
-      + ipv6_addresses               = (known after apply)
-      + key_name                     = "terraform-key"
-      + network_interface_id         = (known after apply)
-      + password_data                = (known after apply)
-      + placement_group              = (known after apply)
-      + primary_network_interface_id = (known after apply)
-      + private_dns                  = (known after apply)
-      + private_ip                   = (known after apply)
-      + public_dns                   = (known after apply)
-      + public_ip                    = (known after apply)
-      + security_groups              = (known after apply)
-      + source_dest_check            = true
-      + subnet_id                    = (known after apply)
-      + tags                         = {
-          + "Name" = "emojivoto-ca"
-        }
-      + tenancy                      = (known after apply)
-
-  [...]
-    }
-
-Plan: 21 to add, 0 to change, 0 to destroy.
-
-Do you want to perform these actions?
-  Terraform will perform the actions described above.
-  Only 'yes' will be accepted to approve.
-
-  Enter a value: yes
+# deploy
+$ terraform apply 
+  -var key_name="<your-key-name>" \
+  -var puppet_ssh_privkey_filename="<your-key-name>" \
+  -var instance_type="t2.medium" \
+  -var region="eu-west-2"
 ```
 
 After some wait time Terraform will confirm the successful completion, printing out details about the newly created infrastructure:
@@ -247,32 +100,39 @@ ca_ip = 13.57.209.0
 emoji_ip = 54.183.41.170
 puppet_ip = 54.183.255.218
 voting_ip = 54.153.37.230
-web_ip = 13.52.182.175
+web_ip = 18.132.246.79
 ```
 
-## Explore Emojivoto on AWS
+## Explore MTLS Emojivoto on AWS
 
 AWS Emojivoto is using internal DNS records to resolve hosts for inter-service communication. All TLS certificates are issued for (SANs) the respective DNS name, e.g. `web.emojivoto.local` or `voting.emojivoto.local` (please see [dns.tf](dns.tf) for details).
 
-For this to work on machines without managed external DNS the hostname/IP address mapping needs to be added to `/etc/hosts` so that hostnames can be verified against server certificates.
+For this to work on machines without managed external DNS the hostname/IP address mapping needs to be added to `/etc/hosts` in your local computer (from where the Terraform scripts were run) so that hostnames can be verified against server certificates.
 
 ```bash
 $ cat /etc/hosts
-127.0.0.1       localhost
-::1             localhost ip6-localhost ip6-loopback
-ff02::1         ip6-allnodes
-ff02::2         ip6-allrouters
-169.254.169.254 metadata.google.internal  # Added by Google
 
-13.52.182.175    web.emojivoto.local
+127.0.0.1       localhost
+127.0.1.1       inti-snd
+
+# The following lines are desirable for IPv6 capable hosts
+::1     ip6-localhost ip6-loopback
+fe00::0 ip6-localnet
+ff00::0 ip6-mcastprefix
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+
+######## MTLS Emojivoto 
+18.132.246.79   web.emojivoto.local
 ```
 
 AWS Emojivoto leverages an internal CA to secure communication between services so every client must specify the root certificate (`root_ca.crt`) of the internal CA to trust it explicitly.
 
-### Using Step CLI
+### 1. Using Step CLI
 
 ```
 $ step certificate inspect --roots root_ca.crt --short https://web.emojivoto.local
+
 X.509v3 TLS Certificate (ECDSA P-256) [Serial: 1993...2666]
   Subject:     web.emojivoto.local
   Issuer:      Smallstep Test Intermediate CA
@@ -281,19 +141,21 @@ X.509v3 TLS Certificate (ECDSA P-256) [Serial: 1993...2666]
           to:  2019-07-26T21:13:35Z
 ```
 
-### Using cURL
+### 2. Using cURL
 
 ```bash
 $ curl -I --cacert root_ca.crt https://web.emojivoto.local
+
 HTTP/1.1 200 OK
 content-type: text/html
-date: Fri, 26 Jul 2019 00:27:02 GMT
+date: Fri, 12 Feb 2021 20:27:02 GMT
 content-length: 560
 x-envoy-upstream-service-time: 0
 server: envoy
 
 # without --cacert specifying the root cert it will fail (expected)
 $ curl -I root_ca.crt https://web.emojivoto.local
+
 curl: (6) Could not resolve host: root_ca.crt
 curl: (60) SSL certificate problem: unable to get local issuer certificate
 More details here: https://curl.haxx.se/docs/sslcerts.html
@@ -305,30 +167,35 @@ curl performs SSL certificate verification by default, using a "bundle"
 [...]
 ```
 
-### Using a browser
+### 3. Using a browser
 
-Navigating a browser to [`https://web.emojivoto.local/`](https://web.emojivoto.local/) will result in a big alert warning that **`Your connection is not private`**. The reason for the alert is `NET::ERR_CERT_AUTHORITY_INVALID` which a TLS error code. The error code means that the certificate path validation could not be verified against the locally known root certificates in the trust store. Since the TLS cert for AWS Emojivoto's web service is **not** using `Public Web PKI` this is expected. Beware of these warnings. In this particular case where we're using an internal CA it's safe to `Proceed to web.emojivoto.local` under the `Advanced` menu.
+Navigating a browser to [`https://web.emojivoto.local/`](https://web.emojivoto.local/) will result in a big alert warning that **`Your connection is not private`**. The reason for the alert is `NET::ERR_CERT_AUTHORITY_INVALID` which a TLS error code. The error code means that the certificate path validation could not be verified against the locally known root certificates in the trust store. 
+Since the TLS cert for AWS Emojivoto's web service is **not** using `Public Web PKI` this is expected. Beware of these warnings. In this particular case where we're using an internal CA it's safe to `Proceed to web.emojivoto.local` under the `Advanced` menu.
 
 It is possible to avoid the TLS warning by installing the internal CA's root certificate into your local trust store. The step CLI has a command to do exactly that:
 
 ```bash
+# Navigate browser to https://web.emojivoto.local without warning
 $ sudo step certificate install root_ca.crt
+
 Certificate root_ca.crt has been installed.
 X.509v3 Root CA Certificate (ECDSA P-256) [Serial: 1038...4951]
   Subject:     Smallstep Test Root CA
   Issuer:      Smallstep Test Root CA
-  Valid from:  2019-07-12T22:14:14Z
-          to:  2029-07-09T22:14:14Z
-# Navigate browser to https://web.emojivoto.local without warning
+  Valid from:  2021-02-12T22:14:14Z
+          to:  2031-02-09T22:14:14Z
+
+# Remove root cert from local trust store. Warning will reappear
 $ sudo step certificate uninstall root_ca.crt
+
 Certificate root_ca.crt has been removed.
 X.509v3 Root CA Certificate (ECDSA P-256) [Serial: 1038...4951]
   Subject:     Smallstep Test Root CA
   Issuer:      Smallstep Test Root CA
-  Valid from:  2019-07-12T22:14:14Z
-          to:  2029-07-09T22:14:14Z
-# Remove root cert from local trust store. Warning will reappear
+  Valid from:  2021-02-12T22:14:14Z
+          to:  2031-02-09T22:14:14Z
 ```
 
 ## That's it!
-Thank you. We would love to hear about your experience and welcome [pull requests](https://github.com/smallstep). The team continues to innovate on our offerings and new features are coming every couple of weeks so please check back often to follow our progress. Alternatively you can [subscribe](https://smallstep.com/subscribe/) to our updates here.
+
+Thank you.
