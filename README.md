@@ -1,4 +1,8 @@
-# MTLS Emojivoto on AWS
+> :bangbang: 
+> :bangbang: This repo is in continuous change, use it under your own responsability.
+> :bangbang: 
+> 
+# MTLS Emojivoto on AWS - Only single user
 
 > This Git repo is based in [SmallStep Emojivoto demo](https://github.com/smallstep/step-aws-emojivoto).  
 > The application used is the [Buoyant Emojivoto](https://github.com/buoyantio/emojivoto) microservices.  
